@@ -1,0 +1,146 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+
+// =========================
+// WiFi
+// =========================
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// =========================
+// LINE OA
+// =========================
+String CHANNEL_ACCESS_TOKEN = "YOUR_CHANNEL_ACCESS_TOKEN";
+String USER_ID = "YOUR_USER_ID";
+
+// =========================
+// pH Sensor
+// =========================
+#define PH_PIN 34
+
+float calibration_value = 21.34;   // ปรับหลังคาลิเบรต
+
+// 5 ชั่วโมง
+const unsigned long SEND_INTERVAL = 18000000UL;
+
+unsigned long lastSend = 0;
+
+// =========================
+// ส่งข้อความเข้า LINE
+// =========================
+void sendLineMessage(String msg) {
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi Disconnected");
+    return;
+  }
+
+  HTTPClient http;
+
+  http.begin("https://api.line.me/v2/bot/message/push");
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", "Bearer " + CHANNEL_ACCESS_TOKEN);
+
+  DynamicJsonDocument doc(512);
+
+  doc["to"] = USER_ID;
+
+  JsonArray messages = doc.createNestedArray("messages");
+
+  JsonObject message = messages.createNestedObject();
+  message["type"] = "text";
+  message["text"] = msg;
+
+  String payload;
+  serializeJson(doc, payload);
+
+  int httpCode = http.POST(payload);
+
+  Serial.print("LINE Response Code: ");
+  Serial.println(httpCode);
+
+  http.end();
+}
+
+// =========================
+// อ่านค่า pH
+// =========================
+float readPH() {
+
+  int buffer_arr[10];
+  long avgval = 0;
+
+  for (int i = 0; i < 10; i++) {
+    buffer_arr[i] = analogRead(PH_PIN);
+    delay(30);
+  }
+
+  for (int i = 0; i < 10; i++) {
+    avgval += buffer_arr[i];
+  }
+
+  float voltage = (float)avgval * 3.3 / 4095.0 / 10.0;
+
+  float ph_act = -5.70 * voltage + calibration_value;
+
+  return ph_act;
+}
+
+// =========================
+// Setup
+// =========================
+void setup() {
+
+  Serial.begin(115200);
+
+  Serial.println("Connecting WiFi...");
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WiFi Connected");
+
+  // ส่งข้อความเมื่อเปิดเครื่อง
+  sendLineMessage(" ระบบตรวจวัดค่า pH เริ่มทำงานแล้ว");
+}
+
+// =========================
+// Loop
+// =========================
+void loop() {
+
+  if (lastSend == 0 || millis() - lastSend >= SEND_INTERVAL) {
+
+    float phValue = readPH();
+
+    String msg = " รายงานคุณภาพน้ำ\n\n";
+    msg += "ค่า pH = ";
+    msg += String(phValue, 2);
+    msg += "\n";
+
+    if (phValue < 6.5) {
+      msg += " สถานะ : กรดเกินไป";
+    }
+    else if (phValue > 8.5) {
+      msg += " สถานะ : ด่างเกินไป";
+    }
+    else {
+      msg += " สถานะ : ค่า pH ปกติ";
+    }
+
+    Serial.println(msg);
+
+    sendLineMessage(msg);
+
+    lastSend = millis();
+  }
+
+  delay(1000);
+}

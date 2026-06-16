@@ -1,0 +1,113 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+
+// WiFi
+const char* ssid = "YOUR_WIFI";
+const char* password = "YOUR_PASSWORD";
+
+// LINE Messaging API
+String CHANNEL_ACCESS_TOKEN = "YOUR_CHANNEL_ACCESS_TOKEN";
+String USER_ID = "YOUR_USER_ID";
+
+// pH Sensor
+#define PH_PIN 34
+
+float calibration_value = 21.34; // ปรับตามการคาลิเบรต
+
+unsigned long lastSend = 0;
+
+void sendLineMessage(String msg) {
+
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  HTTPClient http;
+
+  http.begin("https://api.line.me/v2/bot/message/push");
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", "Bearer " + CHANNEL_ACCESS_TOKEN);
+
+  DynamicJsonDocument doc(512);
+
+  doc["to"] = USER_ID;
+
+  JsonArray messages = doc.createNestedArray("messages");
+
+  JsonObject message = messages.createNestedObject();
+  message["type"] = "text";
+  message["text"] = msg;
+
+  String payload;
+  serializeJson(doc, payload);
+
+  int httpResponseCode = http.POST(payload);
+
+  Serial.print("LINE Response: ");
+  Serial.println(httpResponseCode);
+
+  http.end();
+}
+
+void setup() {
+
+  Serial.begin(115200);
+
+  WiFi.begin(ssid, password);
+
+  Serial.print("Connecting WiFi");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi Connected");
+
+  sendLineMessage("ESP32 pH Monitor Started");
+}
+
+void loop() {
+
+  int buffer_arr[10];
+  long avgval = 0;
+
+  for (int i = 0; i < 10; i++) {
+    buffer_arr[i] = analogRead(PH_PIN);
+    delay(30);
+  }
+
+  for (int i = 0; i < 10; i++) {
+    avgval += buffer_arr[i];
+  }
+
+  float volt = (float)avgval * 3.3 / 4095.0 / 10.0;
+
+  float ph_act = -5.70 * volt + calibration_value;
+
+  Serial.print("pH = ");
+  Serial.println(ph_act);
+
+  // แจ้งเตือนทุก 5 นาที
+  if ((ph_act < 6.5 || ph_act > 8.5) &&
+      millis() - lastSend > 300000) {
+
+    String msg;
+
+if(ph_act < 6.5){
+  msg = "⚠️ pH ต่ำเกินไป (กรด)\n";
+}
+else if(ph_act > 8.5){
+  msg = "⚠️ pH สูงเกินไป (ด่าง)\n";
+}
+
+msg += "ค่า pH = ";
+msg += String(ph_act,2);
+
+sendLineMessage(msg);
+
+    lastSend = millis();
+  }
+
+  delay(2000);
+}
